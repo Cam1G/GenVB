@@ -1,12 +1,13 @@
 """
-Audio DSP & Vosk Forced-Alignment Pipeline for OpenUTAU Voicebank Generation:
+Audio DSP, Vosk Forced Word Alignment & Praat TD-PSOLA Pipeline for OpenUTAU Voicebank Generation:
 - Uses Vosk grammar-guided speech recognition to locate the exact millisecond start/end
   timestamps of every word the user spoke in their recording.
 - Slices the user's ACTUAL spoken words and syllables ("Daisy", "Bell", "give", "me", "half",
   "crazy", "all", "for", "the", "love", "of", "you", etc.) directly from their recording—
   preserving 100% of their real regional/British accent, real consonants, and real vocal tract!
-- Smooth log-spectral time-interpolation on the interior vowel nucleus (zero 1-frame robotic
-  freeze, and zero multi-word "wayo-wayo" ping-pong looping).
+- Uses Phase-Locked Time-Domain WSOLA (`wsola_stretch_phase_locked`) + Praat TD-PSOLA
+  (`praat-parselmouth` overlap-add) instead of spectral vocoding (`pyworld`), keeping the user's
+  actual time-domain microphone waveform, glottal pulse phase, and natural breath texture intact.
 - Studio soft-knee limiter to prevent any clipping on high notes.
 """
 
@@ -20,7 +21,7 @@ import sys
 import tempfile
 import types
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import scipy.interpolate as interp
@@ -28,6 +29,15 @@ import scipy.signal as signal
 import soundfile as sf
 
 from .phonemes import ALIGNMENT_VOCABULARY
+
+try:
+    import parselmouth
+    from parselmouth.praat import call as praat_call
+    HAS_PARSELMOUTH = True
+except Exception:
+    parselmouth = None
+    praat_call = None
+    HAS_PARSELMOUTH = False
 
 try:
     if "pkg_resources" not in sys.modules:
@@ -57,6 +67,8 @@ _VOSK_MODEL: Optional[Any] = None
 SAMPLE_RATE = 44100
 TARGET_NOTE_HZ = 261.63
 
+_NOTE_NAMES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
+
 
 def get_vosk_model() -> Optional[Any]:
     global _VOSK_MODEL
@@ -70,48 +82,273 @@ def get_vosk_model() -> Optional[Any]:
     return _VOSK_MODEL
 
 
+def midi_to_note_name(midi_num: int) -> str:
+    octave = (midi_num // 12) - 1
+    name = _NOTE_NAMES[midi_num % 12]
+    return f"{name}{octave}"
+
+
 def choose_user_base_note(median_f0_hz: float) -> Tuple[float, str, int]:
     """
-    Choose a natural UTAU base reference pitch close to the user's actual speaking pitch
-    so the voicebank and Daisy Bell stay in their comfortable natural chest register
-    (avoiding extreme upward pitch shifts that sound robotic or strained).
-    Returns (base_hz, note_name, semitone_shift_from_c4).
+    Snap the UTAU base reference pitch to the musical semitone closest to the user's
+    actual speaking pitch, and compute `semitone_shift` so the center of the Daisy Bell
+    melody (MIDI 66) sits right in the user's comfortable natural chest register (+1 semitone
+    above their median speaking pitch).
     """
-    if median_f0_hz < 125.0:
-        # Low Male / Baritone (~85-124 Hz) -> Base note A2 (110.00 Hz, MIDI 45, -15 semitones from C4)
-        return 110.00, "A2", -15
-    elif median_f0_hz < 155.0:
-        # Mid-Low / Tenor (~125-154 Hz) -> Base note C3 (130.81 Hz, MIDI 48, -12 semitones from C4)
-        return 130.81, "C3", -12
-    elif median_f0_hz < 195.0:
-        # Alto / High Tenor (~155-194 Hz) -> Base note F3 (174.61 Hz, MIDI 53, -7 semitones from C4)
-        return 174.61, "F3", -7
-    elif median_f0_hz < 235.0:
-        # Mezzo (~195-234 Hz) -> Base note A3 (220.00 Hz, MIDI 57, -3 semitones from C4)
-        return 220.00, "A3", -3
-    else:
-        # Soprano (>= 235 Hz) -> Base note C4 (261.63 Hz, MIDI 60)
-        return 261.63, "C4", 0
+    clamped_f0 = float(np.clip(median_f0_hz, 75.0, 310.0))
+    user_midi = int(round(69.0 + 12.0 * np.log2(clamped_f0 / 440.0)))
+    user_midi = int(np.clip(user_midi, 40, 62))
+
+    base_hz = float(440.0 * (2.0 ** ((user_midi - 69.0) / 12.0)))
+    note_name = midi_to_note_name(user_midi)
+
+    # Center of Daisy Bell melody is MIDI 66 (F#4).
+    # Place the melody's center at `user_midi + 1` so the song stays inside [0.78x .. 1.55x] of speaking F0!
+    semitone_shift = int((user_midi + 1) - 66)
+    return round(base_hz, 2), note_name, semitone_shift
 
 
-def soft_limit_audio(audio: np.ndarray, target_peak: float = 0.80) -> np.ndarray:
+def declip_vocal_waveform(audio: np.ndarray, sr: int = SAMPLE_RATE) -> np.ndarray:
     """
-    Transparent studio soft-knee saturation + peak normalization so high notes NEVER clip.
+    Studio Cubic-Spline De-Clipper:
+    - Reconstructs flat-topped microphone clipping plateaus (caused by hot OS/browser mic gain)
+      using natural CubicSpline arches anchored to the unclipped slopes on either side.
+    - Filters out sub-sonic rumble (< 55 Hz) and ultrasonic harshness (> 9000 Hz).
+    """
+    if len(audio) < 64:
+        return audio.copy()
+    x = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
+    x = x - np.mean(x)
+    peak = float(np.max(np.abs(x)))
+    if peak < 1e-5:
+        return x.astype(np.float64)
+
+    thresh = peak * 0.85
+    is_clipped = np.abs(x) >= thresh
+    clipped_mask = is_clipped.copy()
+    clipped_mask[1:] |= is_clipped[:-1]
+    clipped_mask[:-1] |= is_clipped[1:]
+
+    y = x.copy()
+    n = len(y)
+    idx = 0
+    while idx < n:
+        if not clipped_mask[idx]:
+            idx += 1
+            continue
+        start = idx
+        while idx < n and clipped_mask[idx]:
+            idx += 1
+        end = idx
+        span_len = end - start
+        if 1 <= span_len <= 45 and start >= 3 and end <= n - 3:
+            anchor_idx = np.array([start - 3, start - 2, start - 1, end, end + 1, end + 2], dtype=np.float64)
+            anchor_val = y[anchor_idx.astype(int)]
+            cs = interp.CubicSpline(anchor_idx, anchor_val, bc_type="natural")
+            interp_vals = cs(np.arange(start, end, dtype=np.float64))
+            y[start:end] = np.clip(interp_vals, -peak * 1.22, peak * 1.22)
+
+    if len(y) > 128:
+        b_hp, a_hp = signal.butter(2, 55.0 / (sr / 2.0), btype="high")
+        b_lp, a_lp = signal.butter(2, 9200.0 / (sr / 2.0), btype="low")
+        y = signal.filtfilt(b_hp, a_hp, y)
+        y = signal.filtfilt(b_lp, a_lp, y)
+    return y.astype(np.float64)
+
+
+def soft_limit_audio(
+    audio: np.ndarray,
+    target_peak: float = 0.58,
+    target_rms: float = 0.135,
+) -> np.ndarray:
+    """
+    Pure Linear Studio RMS Gain Staging (ZERO `tanh` wave-shaping distortion!):
+    - Sets active vocal RMS to a comfortable `-17 dBFS` (`0.135`) and linearly bounds
+      peaks to `<= target_peak` (`0.58`, leaving `+4.7 dB` of clean digital headroom).
     """
     if len(audio) == 0:
         return audio
-    x = audio - np.mean(audio)
+    x = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
+    x = x - np.mean(x)
     peak = float(np.max(np.abs(x)))
     if peak < 1e-6:
         return x.astype(np.float64)
-    # Normalize to unit range, apply gentle soft-knee tanh compression on transient spikes, then scale
-    norm = x / peak
-    compressed = np.tanh(norm * 1.15) / np.tanh(1.15)
-    return (compressed * target_peak).astype(np.float64)
+
+    active = x[np.abs(x) > peak * 0.08]
+    rms = float(np.sqrt(np.mean(active ** 2))) if len(active) > 16 else float(np.sqrt(np.mean(x ** 2)))
+    eff_target_rms = min(target_rms, target_peak * 0.26)
+    gain = eff_target_rms / max(1e-6, rms)
+    scaled = x * gain
+
+    new_peak = float(np.max(np.abs(scaled)))
+    if new_peak > target_peak:
+        scaled = scaled * (target_peak / new_peak)
+    return scaled.astype(np.float64)
 
 
-def normalize_peak(audio: np.ndarray, target_peak: float = 0.82) -> np.ndarray:
+def normalize_peak(audio: np.ndarray, target_peak: float = 0.58) -> np.ndarray:
     return soft_limit_audio(audio, target_peak=target_peak)
+
+
+def wsola_stretch_phase_locked(
+    audio: np.ndarray,
+    target_samples: int,
+    sr: int = SAMPLE_RATE,
+    min_head_samples: int = 1600,
+) -> np.ndarray:
+    """
+    Phase-Locked Multi-Period Time-Domain WSOLA (Waveform-Similarity Overlap-Add):
+    - Expands (or trims) the interior vowel nucleus of a spoken word in the TIME DOMAIN
+      without any FFT spectral vocoding.
+    - Uses 36ms periodic Hann windows (~4 glottal periods per grain) and cross-correlation
+      (`np.correlate` over +-11ms) to lock every grain overlap to the exact glottal cycle phase.
+    - Preserves 100% of the speaker's raw microphone waveform, glottal closure texture, breathiness,
+      and regional accent formants.
+    """
+    n = len(audio)
+    if n < int(0.075 * sr):
+        return audio.copy()
+
+    # If target_samples is shorter than the raw clip, trim the interior vowel with a phase-locked splice
+    H = int(0.018 * sr)  # 18ms half-window
+    W = 2 * H            # 36ms full grain
+    search_tol = int(0.011 * sr)  # +-11ms covers a full glottal period down to 45Hz
+
+    if n >= target_samples:
+        if n - target_samples < H:
+            return audio[:target_samples].copy()
+        head_keep = max(min_head_samples, int(target_samples * 0.55))
+        head_keep = min(head_keep, target_samples - H - 32)
+        tail_keep = target_samples - head_keep
+        if head_keep > H and tail_keep > H and n > head_keep + tail_keep + search_tol:
+            idx = np.arange(W, dtype=np.float64)
+            hann = 0.5 * (1.0 - np.cos(2.0 * np.pi * idx / W))
+            fade_in = hann[:H]
+            fade_out = hann[H:]
+            ref_seg = audio[head_keep - H : head_keep]
+            t_start_nom = n - tail_keep - H
+            s_min = max(head_keep, t_start_nom - search_tol)
+            s_max = min(n - tail_keep - H, t_start_nom + search_tol)
+            if s_max > s_min and np.max(np.abs(ref_seg)) > 1e-6:
+                corr = np.correlate(audio[s_min : s_max + H], ref_seg, mode="valid")
+                best_t = s_min + int(np.argmax(corr))
+            else:
+                best_t = t_start_nom
+            overlap = audio[head_keep - H : head_keep] * fade_out + audio[best_t : best_t + H] * fade_in
+            return np.concatenate([audio[: head_keep - H], overlap, audio[best_t + H : best_t + H + tail_keep]])
+        return audio[:target_samples].copy()
+
+    head_end = min(n // 2, max(min_head_samples, int(n * 0.24)))
+    tail_len = min(n // 4, max(H + search_tol + 64, int(n * 0.20)))
+    tail_start = n - tail_len
+
+    if tail_start - head_end < W + search_tol:
+        # Fallback for very short clips: use smaller 20ms grain
+        H = int(0.010 * sr)
+        W = 2 * H
+        search_tol = int(0.008 * sr)
+        head_end = max(int(0.018 * sr), int(n * 0.22))
+        tail_len = max(H + search_tol + 16, int(n * 0.20))
+        tail_start = n - tail_len
+        if tail_start - head_end < W:
+            return audio.copy()
+
+    idx = np.arange(W, dtype=np.float64)
+    hann = 0.5 * (1.0 - np.cos(2.0 * np.pi * idx / W))
+    fade_in = hann[:H]
+    fade_out = hann[H:]
+
+    out: List[float] = list(audio[:head_end])
+    prev_tail = audio[head_end : head_end + H] * fade_out
+    prev_unwindowed = audio[head_end : head_end + H]
+
+    needed_mid = max(H, target_samples - head_end - tail_len)
+    n_hops = max(1, int(round(needed_mid / H)))
+
+    nuc_min = head_end
+    nuc_max = max(nuc_min + 1, tail_start - W)
+
+    for step in range(n_hops):
+        prog = (step + 0.5) / max(1, n_hops)
+        # Smooth organic traversal across the interior vowel nucleus
+        # so adjacent glottal cycles are always distinct and never freeze on a single pulse
+        sweep = 0.5 - 0.5 * np.cos(np.pi * prog)
+        target_pos = int(nuc_min + sweep * (nuc_max - nuc_min))
+        s_min = max(nuc_min, target_pos - search_tol)
+        s_max = min(n - W, target_pos + search_tol)
+
+        if s_max > s_min and np.max(np.abs(prev_unwindowed)) > 1e-6:
+            cand = audio[s_min : s_max + H]
+            corr = np.correlate(cand, prev_unwindowed, mode="valid")
+            chosen = s_min + int(np.argmax(corr))
+        else:
+            chosen = target_pos
+
+        grain = audio[chosen : chosen + W]
+        overlap_sum = prev_tail + grain[:H] * fade_in
+        out.extend(overlap_sum)
+        prev_tail = grain[H:] * fade_out
+        prev_unwindowed = grain[H:]
+
+    # Phase-lock the natural word release tail with the final half-grain
+    t_min = max(head_end, tail_start - search_tol)
+    t_max = min(n - H - 1, tail_start + search_tol)
+    if t_max > t_min and np.max(np.abs(prev_unwindowed)) > 1e-6:
+        cand_t = audio[t_min : t_max + H]
+        corr_t = np.correlate(cand_t, prev_unwindowed, mode="valid")
+        best_tail = t_min + int(np.argmax(corr_t))
+    else:
+        best_tail = min(n - H - 1, tail_start)
+
+    final_overlap = prev_tail + audio[best_tail : best_tail + H] * fade_in
+    out.extend(final_overlap)
+    out.extend(audio[best_tail + H :])
+    return np.array(out, dtype=np.float64)
+
+
+def psola_pitch_transfer(
+    audio: np.ndarray,
+    sr: int,
+    pitch_curve_fn: Callable[[np.ndarray, np.ndarray, float], np.ndarray],
+    f0_floor: float = 55.0,
+    f0_ceil: float = 480.0,
+) -> np.ndarray:
+    """
+    Time-Domain Pitch-Synchronous Overlap-Add (TD-PSOLA) via Praat (`praat-parselmouth`):
+    - Moves glottal waveform cycles in the time domain to match `pitch_curve_fn(times, orig_f0, med_f0)`
+      without running any FFT spectral vocoder (`pyworld`).
+    - Unvoiced consonants and vocal tract formants (regional accent) remain 100% untouched.
+    """
+    if not HAS_PARSELMOUTH or parselmouth is None or praat_call is None or len(audio) < int(0.065 * sr):
+        return audio.copy()
+
+    try:
+        snd = parselmouth.Sound(audio.astype(np.float64), sampling_frequency=float(sr))
+        pitch_obj = snd.to_pitch(time_step=0.010, pitch_floor=f0_floor, pitch_ceiling=f0_ceil)
+        orig_f0 = pitch_obj.selected_array["frequency"]
+        times = pitch_obj.xs()
+
+        voiced = orig_f0[orig_f0 > f0_floor]
+        if len(voiced) == 0:
+            return audio.copy()
+        med_f0 = float(np.median(voiced))
+
+        target_f0 = pitch_curve_fn(times, orig_f0, med_f0)
+
+        manip = praat_call(snd, "To Manipulation", 0.005, f0_floor, f0_ceil)
+        pitch_tier = praat_call(manip, "Extract pitch tier")
+        praat_call(pitch_tier, "Remove points between", 0.0, snd.xmax)
+
+        for t_val, f_val in zip(times, target_f0):
+            if f_val > f0_floor:
+                praat_call(pitch_tier, "Add point", float(t_val), float(f_val))
+
+        praat_call([pitch_tier, manip], "Replace pitch tier")
+        res_snd = praat_call(manip, "Get resynthesis (overlap-add)")
+        out = res_snd.values[0].astype(np.float64)
+        return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+    except Exception:
+        return audio.copy()
 
 
 def load_audio_mono_44k(audio_bytes: bytes, filename_hint: str = "input.wav") -> np.ndarray:
@@ -121,7 +358,8 @@ def load_audio_mono_44k(audio_bytes: bytes, filename_hint: str = "input.wav") ->
         mono = np.mean(data, axis=1)
         if sr != SAMPLE_RATE:
             mono = resample_audio(mono, sr, SAMPLE_RATE)
-        return soft_limit_audio(mono, 0.85)
+        mono = declip_vocal_waveform(mono, SAMPLE_RATE)
+        return soft_limit_audio(mono, 0.58)
     except Exception:
         pass
 
@@ -138,7 +376,8 @@ def load_audio_mono_44k(audio_bytes: bytes, filename_hint: str = "input.wav") ->
         subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         data, sr = sf.read(dst_tmp.name, dtype="float64", always_2d=True)
         mono = np.mean(data, axis=1)
-        return soft_limit_audio(mono, 0.85)
+        mono = declip_vocal_waveform(mono, SAMPLE_RATE)
+        return soft_limit_audio(mono, 0.58)
 
 
 def resample_audio(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
@@ -151,9 +390,9 @@ def resample_audio(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarra
 
 
 def save_utau_wav(path: Path, audio: np.ndarray) -> None:
-    """Save strictly as 44,100 Hz, 16-bit PCM, Mono WAV with soft-knee anti-clipping."""
+    """Save strictly as 44,100 Hz, 16-bit PCM, Mono WAV with clean studio headroom."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    clean = np.clip(soft_limit_audio(audio, 0.80), -0.98, 0.98)
+    clean = np.clip(soft_limit_audio(audio, 0.58), -0.95, 0.95)
     sf.write(str(path), clean, SAMPLE_RATE, subtype="PCM_16")
 
 
@@ -172,12 +411,22 @@ def analyze_user_voice(audio: np.ndarray, sr: int = SAMPLE_RATE) -> Dict[str, An
             "brightness": 0.45,
         }
 
-    if HAS_PYWORLD and pw is not None:
+    voiced_f0 = np.array([], dtype=np.float64)
+    if HAS_PARSELMOUTH and parselmouth is not None:
+        try:
+            snd = parselmouth.Sound(audio.astype(np.float64), sampling_frequency=float(sr))
+            pitch_obj = snd.to_pitch(time_step=0.010, pitch_floor=60.0, pitch_ceiling=480.0)
+            f0_vals = pitch_obj.selected_array["frequency"]
+            voiced_f0 = f0_vals[f0_vals > 62.0]
+        except Exception:
+            voiced_f0 = np.array([], dtype=np.float64)
+
+    if len(voiced_f0) == 0 and HAS_PYWORLD and pw is not None:
         _f0, t = pw.dio(audio.astype(np.float64), sr, f0_floor=60.0, f0_ceil=500.0, frame_period=5.0)
         f0 = pw.stonemask(audio.astype(np.float64), _f0, t, sr)
         rms_frames = _frame_rms(audio, sr, frame_period=5.0, n_frames=len(f0))
         voiced_f0 = f0[(f0 > 62.0) & (rms_frames > np.percentile(rms_frames, 25))]
-    else:
+    elif len(voiced_f0) == 0:
         voiced_f0 = _estimate_f0_autocorr(audio, sr)
 
     if len(voiced_f0) > 0:
@@ -245,11 +494,6 @@ def _estimate_f0_autocorr(audio: np.ndarray, sr: int) -> np.ndarray:
 
 
 def stretch_log_spectrum_smooth(sp_chunk: np.ndarray, target_frames: int) -> np.ndarray:
-    """
-    Smoothly time-stretch a spectral matrix `sp_chunk` (shape [N, bins]) to `target_frames`
-    using linear interpolation in log-spectral space along the time axis (forward-only,
-    never ping-pong looping and never freezing a single 1D robot frame!).
-    """
     n_src = len(sp_chunk)
     if n_src == 0:
         return sp_chunk
@@ -267,14 +511,14 @@ def stretch_log_spectrum_smooth(sp_chunk: np.ndarray, target_frames: int) -> np.
 
 class UserVoiceCorpus:
     """
-    Word-Aligned Direct User Voice Extractor (Vosk Forced Alignment + WORLD Natural Resynthesis).
+    Word-Aligned Time-Domain User Voice Extractor (Vosk Forced Alignment + WSOLA + Praat TD-PSOLA).
     1. Aligns every word in the user's recording (`reference.wav`) using Vosk grammar alignment.
     2. For each phoneme/diphone in `PHONEME_INVENTORY`, slices the ACTUAL word spoken by the user
        (e.g. "Daisy", "Bell", "give", "me", "half", "crazy", "all", "for", "the", "love", "of", "you")
        so the user's real regional/British accent, real vowel formants, and real consonants are
-       100% preserved without synthetic formant overwriting!
-    3. Time-stretches only the pure interior vowel nucleus of that single isolated word via
-       smooth forward log-spectral interpolation (no frozen 1-frame robot buzz, no multi-word "wayo").
+       100% preserved.
+    3. Expands the interior vowel in the TIME DOMAIN via Phase-Locked WSOLA and gently centers pitch
+       using Praat TD-PSOLA (`parselmouth`)—with ZERO spectral vocoder (`pyworld`) buzz!
     """
 
     def __init__(self, reference_audio: np.ndarray, voice_profile: Dict[str, Any], sr: int = SAMPLE_RATE):
@@ -284,7 +528,7 @@ class UserVoiceCorpus:
         self.formant_scale = float(voice_profile.get("formant_scale", 1.0))
         self.frame_period = 5.0
 
-        self.audio = soft_limit_audio(reference_audio, 0.85)
+        self.audio = soft_limit_audio(declip_vocal_waveform(reference_audio, sr), 0.58)
         self.aligned_words: Dict[str, List[Tuple[float, float]]] = {}
         self.fallback_syllables: List[np.ndarray] = []
 
@@ -351,7 +595,6 @@ class UserVoiceCorpus:
             spans = self.aligned_words.get(word_key.lower())
             if not spans:
                 continue
-            # Pick the longest, clearest occurrence of this word
             st_sec, en_sec = max(spans, key=lambda sp: sp[1] - sp[0])
             sliced = self._slice_word_region(st_sec, en_sec, slice_mode)
             if sliced is not None and len(sliced) >= int(0.075 * self.sr):
@@ -372,7 +615,6 @@ class UserVoiceCorpus:
             return word_wav
 
         if slice_mode in ("pre_sibilant", "from_sibilant"):
-            # Locate internal sibilant (-z- in 'daisy'/'crazy'/'lazy', -s- in 'answer'/'across'/'voices')
             b_hi, a_hi = signal.butter(2, [3100 / (self.sr / 2), 8500 / (self.sr / 2)], btype="band")
             b_lo, a_lo = signal.butter(2, [180 / (self.sr / 2), 1800 / (self.sr / 2)], btype="band")
             hi = signal.lfilter(b_hi, a_hi, word_wav) ** 2
@@ -401,7 +643,6 @@ class UserVoiceCorpus:
             return word_wav[int(n * 0.40) :]
 
         if slice_mode == "vowel_core":
-            # Trim outer consonants to isolate the pure spoken vowel in the user's accent
             b_lo, a_lo = signal.butter(2, [160 / (self.sr / 2), 2400 / (self.sr / 2)], btype="band")
             v_energy = signal.lfilter(b_lo, a_lo, word_wav) ** 2
             win = max(16, int(0.015 * self.sr))
@@ -418,14 +659,10 @@ class UserVoiceCorpus:
 
         return word_wav
 
-    def synthesize_phoneme_from_user_voice(self, phoneme_item: Dict[str, Any]) -> np.ndarray:
+    def get_raw_word_slice(self, phoneme_item: Dict[str, Any]) -> np.ndarray:
         """
-        Extract the user's real spoken syllable/word for `phoneme_item` and prepare a
-        480ms natural UTAU sample at `self.base_hz`:
-        - Preserves 100% of the user's actual spectral envelope `sp` (their real accent & formants!)
-        - Preserves their real spoken consonant onset
-        - Preserves 25% of their natural human vocal-cord micro-intonation (never robotic!)
-        - Smoothly stretches only the pure interior vowel nucleus via forward log-spectral interpolation
+        Return the untouched, un-vocoded microphone word slice for `phoneme_item`
+        (with gentle attack/release fades so single-pass TD-PSOLA resamplers have zero clicks).
         """
         raw_slice = self._find_best_word_slice(phoneme_item)
         if raw_slice is None:
@@ -435,112 +672,50 @@ class UserVoiceCorpus:
             else:
                 return synthesize_local_phoneme(phoneme_item, self.voice_profile, self.sr, self.base_hz)
 
-        if not (HAS_PYWORLD and pw is not None) or len(raw_slice) < int(0.065 * self.sr):
-            return soft_limit_audio(raw_slice, 0.80)
-
-        x = soft_limit_audio(raw_slice, 0.82).astype(np.float64)
-        ptype = phoneme_item.get("type", "cv")
-
-        _f0, t = pw.dio(x, self.sr, f0_floor=58.0, f0_ceil=480.0, frame_period=self.frame_period)
-        f0 = pw.stonemask(x, _f0, t, self.sr)
-        n_frames = len(f0)
-        if n_frames < 8:
-            return x
-
-        voiced_vals = f0[f0 > 60.0]
-        med_f0 = float(np.median(voiced_vals)) if len(voiced_vals) > 0 else self.base_hz
-
-        # Identify consonant onset vs voiced vowel body
-        cons_frames = 2 if ptype == "vowel" else min(n_frames // 3, 14)
-        voiced_mask = f0 > 60.0
-        if n_frames > cons_frames + 3:
-            voiced_mask[cons_frames:] = True
-
-        # Ensure non-zero F0 on all vowel frames BEFORE calling cheaptrick & d4c
-        f0_for_sp = np.where(voiced_mask, np.where(f0 > 60.0, f0, med_f0), 0.0)
-
-        sp = np.maximum(pw.cheaptrick(x, f0_for_sp, t, self.sr), 1e-10)
-        ap = np.clip(pw.d4c(x, f0_for_sp, t, self.sr), 0.001, 0.85)
-        # Keep natural human breath warmth on the vowel while capping excess noise <= 0.25
-        ap[cons_frames:] = np.minimum(ap[cons_frames:], 0.25)
-
-        # Preserve 25% of the user's real vocal-cord micro-prosody around `self.base_hz`
-        # so the sample sounds like a real human voice and not a flat digital buzzer!
-        raw_ratio = np.where(f0 > 60.0, f0 / med_f0, 1.0)
-        natural_micro_contour = np.clip(raw_ratio ** 0.25, 0.96, 1.04)
-
-        # Time-stretch ONLY the interior 55% of this word's vowel nucleus to reach ~98 frames (490ms)
-        target_total_frames = 98
-        if n_frames < target_total_frames and n_frames >= cons_frames + 6:
-            v_len = n_frames - cons_frames
-            nuc_start = cons_frames + max(2, int(v_len * 0.20))
-            nuc_end = cons_frames + max(nuc_start - cons_frames + 3, int(v_len * 0.78))
-            nuc_end = min(n_frames - 2, nuc_end)
-
-            head_sp = sp[:nuc_start]
-            core_sp = sp[nuc_start:nuc_end]
-            tail_sp = sp[nuc_end:]
-
-            head_ap = ap[:nuc_start]
-            core_ap = ap[nuc_start:nuc_end]
-            tail_ap = ap[nuc_end:]
-
-            head_mc = natural_micro_contour[:nuc_start]
-            core_mc = natural_micro_contour[nuc_start:nuc_end]
-            tail_mc = natural_micro_contour[nuc_end:]
-
-            needed_core = max(len(core_sp), target_total_frames - len(head_sp) - len(tail_sp))
-            stretched_sp = stretch_log_spectrum_smooth(core_sp, needed_core)
-            stretched_ap = stretch_log_spectrum_smooth(core_ap, needed_core)
-
-            mc_src_t = np.linspace(0.0, 1.0, len(core_mc))
-            mc_dst_t = np.linspace(0.0, 1.0, needed_core)
-            stretched_mc = np.interp(mc_dst_t, mc_src_t, core_mc)
-
-            sp_out = np.vstack([head_sp, stretched_sp, tail_sp])
-            ap_out = np.vstack([head_ap, stretched_ap, tail_ap])
-            mc_out = np.concatenate([head_mc, stretched_mc, tail_mc])
-        else:
-            sp_out = sp
-            ap_out = ap
-            mc_out = natural_micro_contour
-
-        n_out = len(sp_out)
-        voiced_out = np.ones(n_out, dtype=bool)
-        if cons_frames > 0:
-            voiced_out[:cons_frames] = voiced_mask[:cons_frames]
-        f0_out = np.where(voiced_out, self.base_hz * mc_out, 0.0)
-
-        wav_out = pw.synthesize(
-            np.ascontiguousarray(f0_out, dtype=np.float64),
-            np.ascontiguousarray(np.maximum(sp_out, 1e-10), dtype=np.float64),
-            np.ascontiguousarray(np.clip(ap_out, 0.001, 0.85), dtype=np.float64),
-            self.sr,
-            frame_period=self.frame_period,
-        )
-        wav_out = np.nan_to_num(wav_out, nan=0.0, posinf=0.0, neginf=0.0)
-
-        # Splice the user's raw un-vocoded consonant onset waveform at the very start for 100% real consonant crispness!
-        hop_samples = int((self.frame_period / 1000.0) * self.sr)
-        cons_samples = cons_frames * hop_samples
-        if ptype != "vowel" and cons_samples > 32 and len(x) > cons_samples + 32 and len(wav_out) > cons_samples + 32:
-            xfade = min(cons_samples // 2, int(0.015 * self.sr))
-            raw_cons = x[:cons_samples]
-            fade_o = np.linspace(1.0, 0.0, xfade)
-            fade_i = np.linspace(0.0, 1.0, xfade)
-            wav_out[: cons_samples - xfade] = raw_cons[: cons_samples - xfade]
-            wav_out[cons_samples - xfade : cons_samples] = (
-                raw_cons[cons_samples - xfade : cons_samples] * fade_o
-                + wav_out[cons_samples - xfade : cons_samples] * fade_i
-            )
-
+        x = trim_silence(soft_limit_audio(raw_slice, 0.58), self.sr)
         attack = int(0.012 * self.sr)
+        release = int(0.022 * self.sr)
+        if len(x) > attack + release:
+            x = x.copy()
+            x[:attack] *= np.linspace(0.0, 1.0, attack)
+            x[-release:] *= np.linspace(1.0, 0.0, release)
+        return soft_limit_audio(x, 0.58)
+
+    def synthesize_phoneme_from_user_voice(self, phoneme_item: Dict[str, Any]) -> np.ndarray:
+        """
+        Prepare a ~440ms natural OpenUTAU voicebank `.wav` sample directly in the time domain:
+        - Uses Phase-Locked Time-Domain WSOLA (`wsola_stretch_phase_locked`) to expand short spoken vowels
+          without any FFT vocoder (`pyworld`).
+        - Uses Praat TD-PSOLA (`psola_pitch_transfer`) with speaker-locked F0 floor/ceiling to gently
+          center the pitch around `self.base_hz` while preserving 45% of the speaker's natural pitch contour!
+        """
+        raw_word = self.get_raw_word_slice(phoneme_item)
+        ptype = phoneme_item.get("type", "cv")
+        min_head = int(0.022 * self.sr) if ptype == "vowel" else int(0.055 * self.sr)
+
+        # Expand in the time domain to ~430ms for OpenUTAU sustain stability
+        target_len = int(0.43 * self.sr)
+        expanded = wsola_stretch_phase_locked(raw_word, target_len, self.sr, min_head_samples=min_head)
+
+        base_hz = self.base_hz
+        f0_floor = max(55.0, base_hz * 0.60)
+        f0_ceil = min(380.0, base_hz * 1.65)
+
+        def _gentle_contour(times: np.ndarray, orig_f0: np.ndarray, med_f0: float) -> np.ndarray:
+            ratio = np.where(orig_f0 > f0_floor, orig_f0 / max(60.0, med_f0), 1.0)
+            # Retain 45% of the speaker's real pitch inflection around their natural base note
+            natural_inflection = np.clip(ratio ** 0.45, 0.92, 1.08)
+            return base_hz * natural_inflection
+
+        wav_out = psola_pitch_transfer(expanded, self.sr, _gentle_contour, f0_floor=f0_floor, f0_ceil=f0_ceil)
+
+        attack = int(0.014 * self.sr)
         release = int(0.028 * self.sr)
         if len(wav_out) > attack + release:
             wav_out[:attack] *= np.linspace(0.0, 1.0, attack)
             wav_out[-release:] *= np.linspace(1.0, 0.0, release)
 
-        return soft_limit_audio(wav_out, 0.80)
+        return soft_limit_audio(wav_out, 0.58)
 
 
 def slice_batch_with_timestamps(
@@ -649,72 +824,30 @@ def flatten_pitch_and_prepare_sample(
     ptype = phoneme_item.get("type", "cv")
 
     if already_flattened:
-        synthesized = soft_limit_audio(clip, 0.80)
+        synthesized = soft_limit_audio(clip, 0.58)
         consonant_dur_ms = 18.0 if ptype == "vowel" else 65.0
-    elif HAS_PYWORLD and pw is not None and len(clip) >= int(0.08 * sr):
-        x = soft_limit_audio(clip, 0.82).astype(np.float64)
-        _f0, t = pw.dio(x, sr, f0_floor=58.0, f0_ceil=520.0, frame_period=5.0)
-        f0 = pw.stonemask(x, _f0, t, sr)
+    elif len(clip) >= int(0.075 * sr):
+        min_head = int(0.022 * sr) if ptype == "vowel" else int(0.055 * sr)
+        expanded = wsola_stretch_phase_locked(clip, int(0.44 * sr), sr, min_head_samples=min_head)
+        f0_floor = max(55.0, target_f0 * 0.60)
+        f0_ceil = min(380.0, target_f0 * 1.65)
 
-        voiced_mask = f0 > 60.0
-        cons_frames = 3 if ptype == "vowel" else 13
-        if len(voiced_mask) > cons_frames + 4:
-            voiced_mask[cons_frames:] = True
+        def _contour(times: np.ndarray, orig_f0: np.ndarray, med_f0: float) -> np.ndarray:
+            ratio = np.where(orig_f0 > f0_floor, orig_f0 / max(60.0, med_f0), 1.0)
+            return target_f0 * np.clip(ratio ** 0.40, 0.93, 1.07)
 
-        voiced_f0_vals = f0[f0 > 60.0]
-        med_f0 = float(np.median(voiced_f0_vals)) if len(voiced_f0_vals) > 0 else target_f0
-        f0_clean = np.where(voiced_mask, np.where(f0 > 60.0, f0, med_f0), 0.0)
-
-        sp = np.maximum(pw.cheaptrick(x, f0_clean, t, sr), 1e-10)
-        ap = np.clip(pw.d4c(x, f0_clean, t, sr), 0.001, 0.85)
-        ap[voiced_mask] = np.minimum(ap[voiced_mask], 0.22)
-
-        voiced_indices = np.where(voiced_mask)[0]
-        first_voiced_frame = int(voiced_indices[0]) if len(voiced_indices) > 0 else 0
-
-        raw_ratio = np.where(f0 > 60.0, f0 / med_f0, 1.0)
-        micro_contour = np.clip(raw_ratio ** 0.25, 0.96, 1.04)
-        flat_f0 = np.where(voiced_mask, target_f0 * micro_contour, 0.0)
-
-        n_frames = len(flat_f0)
-        target_min_frames = 100
-        if n_frames < target_min_frames and len(voiced_indices) >= 6:
-            mid_s = int(voiced_indices[len(voiced_indices) // 4])
-            mid_e = int(voiced_indices[(3 * len(voiced_indices)) // 4])
-            if mid_e <= mid_s + 2:
-                mid_e = min(n_frames, mid_s + 4)
-            needed = target_min_frames - (n_frames - (mid_e - mid_s))
-            stretched_sp = stretch_log_spectrum_smooth(sp[mid_s:mid_e], needed)
-            stretched_ap = stretch_log_spectrum_smooth(ap[mid_s:mid_e], needed)
-            f0_mid = np.full(needed, target_f0, dtype=np.float64)
-
-            flat_f0 = np.concatenate([flat_f0[:mid_s], f0_mid, flat_f0[mid_e:]])
-            sp = np.vstack([sp[:mid_s], stretched_sp, sp[mid_e:]])
-            ap = np.vstack([ap[:mid_s], stretched_ap, ap[mid_e:]])
-
-        synthesized = pw.synthesize(
-            np.ascontiguousarray(flat_f0, dtype=np.float64),
-            np.ascontiguousarray(sp, dtype=np.float64),
-            np.ascontiguousarray(ap, dtype=np.float64),
-            sr,
-            frame_period=5.0,
-        )
-        synthesized = np.nan_to_num(synthesized, nan=0.0, posinf=0.0, neginf=0.0)
-        consonant_dur_ms = float(first_voiced_frame * 5.0)
-        if ptype == "vowel":
-            consonant_dur_ms = min(consonant_dur_ms, 20.0)
-        else:
-            consonant_dur_ms = float(np.clip(consonant_dur_ms, 40.0, 120.0))
+        synthesized = psola_pitch_transfer(expanded, sr, _contour, f0_floor=f0_floor, f0_ceil=f0_ceil)
+        consonant_dur_ms = 18.0 if ptype == "vowel" else 65.0
     else:
-        synthesized = soft_limit_audio(clip, 0.80)
+        synthesized = soft_limit_audio(clip, 0.58)
         consonant_dur_ms = 18.0 if ptype == "vowel" else 65.0
 
-    fade_samples = int(0.015 * sr)
+    fade_samples = int(0.014 * sr)
     if len(synthesized) > fade_samples * 2:
         synthesized[:fade_samples] *= np.linspace(0.0, 1.0, fade_samples)
         synthesized[-fade_samples:] *= np.linspace(1.0, 0.0, fade_samples)
 
-    synthesized = soft_limit_audio(synthesized, 0.80)
+    synthesized = soft_limit_audio(synthesized, 0.58)
     pad_len = int(0.075 * sr)
     padded = np.concatenate([
         np.zeros(pad_len, dtype=np.float64),

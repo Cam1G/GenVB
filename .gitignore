@@ -1,2 +1,3 @@
 generated_sessions
 .env.example
+**/__pycache__/

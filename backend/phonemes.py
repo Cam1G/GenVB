@@ -8,9 +8,9 @@ from typing import Any, Dict, List
 TELEPROMPTER_SENTENCES: List[Dict[str, str]] = [
     {
         "id": "sentence_1",
-        "title": "Sentence 1 — Daisy Bell Chorus & Bright Vowels",
+        "title": "Sentence 1 — Daisy Bell Chorus & Bright Vowels (Hold Vowels Gently)",
         "text": "Daisy Bell, give me your answer do, riding a shiny yellow bicycle across the sunny bay.",
-        "focus": "Captures your real pronunciation and accent for 'Daisy Bell, give me your answer do' plus bright diphthongs.",
+        "focus": "Tip: Hold open vowels slightly ('Daaai-syyy', 'doooo') to give your voicebank rich, natural sustain.",
     },
     {
         "id": "sentence_2",
@@ -20,9 +20,9 @@ TELEPROMPTER_SENTENCES: List[Dict[str, str]] = [
     },
     {
         "id": "sentence_3",
-        "title": "Sentence 3 — Sustained Resonance & Lyric Finale",
+        "title": "Sentence 3 — Sustained Resonance & Lyric Finale (Hold Vowels Gently)",
         "text": "I'm half crazy, all for the love of you, our voices echo clearly through the night.",
-        "focus": "Captures 'I'm half crazy, all for the love of you' in your natural accent and vocal resonance.",
+        "focus": "Tip: Speak warmly and linger slightly on 'haaaalf craaa-zyyy' and 'youuuu' for maximum naturalness.",
     },
 ]
 

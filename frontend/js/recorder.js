@@ -94,8 +94,8 @@ export class VoiceRecorderController {
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: false,
-          noiseSuppression: true,
-          autoGainControl: true,
+          noiseSuppression: false,
+          autoGainControl: false,
         },
       });
 
@@ -309,9 +309,16 @@ export class VoiceRecorderController {
     writeStr(36, "data");
     view.setUint32(40, samples.length * 2, true);
 
+    let peak = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const a = Math.abs(samples[i]);
+      if (a > peak) peak = a;
+    }
+    const scale = peak > 0.68 ? 0.68 / peak : 1.0;
+
     let offset = 44;
     for (let i = 0; i < samples.length; i++, offset += 2) {
-      const s = Math.max(-1, Math.min(1, samples[i]));
+      const s = Math.max(-0.98, Math.min(0.98, samples[i] * scale));
       view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
     }
 

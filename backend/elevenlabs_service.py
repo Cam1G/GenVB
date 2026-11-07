@@ -54,12 +54,13 @@ async def generate_voicebank_samples(
 
     mode_used = "local_user_voice_corpus"
     mode_detail = (
-        f"Direct User Voice Spectral Extraction (Base Pitch: {base_note_name} / {base_note_hz} Hz)"
+        f"Vosk Word-Aligned + Praat TD-PSOLA Extraction (Base Pitch: {base_note_name} / {base_note_hz} Hz)"
     )
     cloned_voice_id: Optional[str] = None
     voice_cleaned_up = False
 
     raw_clips_by_id: Dict[str, np.ndarray] = {}
+    unshifted_word_clips: Dict[str, np.ndarray] = {}
     from_local_corpus: set[str] = set()
 
     if not use_demo_mode and resolved_key:
@@ -130,19 +131,21 @@ async def generate_voicebank_samples(
                     sliced_clips = slice_batch_with_timestamps(batch_audio, alignment, items, SAMPLE_RATE)
                     for item, clip in zip(items, sliced_clips):
                         raw_clips_by_id[item["id"]] = clip
+                        unshifted_word_clips[item["id"]] = clip
 
                 mode_used = "elevenlabs_ivc"
                 mode_detail = (
-                    f"ElevenLabs Instant Voice Cloning + WORLD Vocoder ({base_note_name} / {base_note_hz} Hz)"
+                    f"ElevenLabs Instant Voice Cloning + Praat TD-PSOLA ({base_note_name} / {base_note_hz} Hz)"
                 )
 
         except Exception as exc:
             mode_used = "local_user_voice_corpus"
             mode_detail = (
-                f"Direct User Voice Spectral Extraction ({base_note_name} / {base_note_hz} Hz — "
+                f"Vosk Word-Aligned + Praat TD-PSOLA ({base_note_name} / {base_note_hz} Hz — "
                 f"ElevenLabs fallback: {str(exc)[:110]})"
             )
             raw_clips_by_id.clear()
+            unshifted_word_clips.clear()
 
         finally:
             if cloned_voice_id and auto_cleanup_voice and resolved_key:
@@ -159,11 +162,12 @@ async def generate_voicebank_samples(
     # Extract directly from the user's recorded voice corpus for Local Mode (or any missing clips)
     if len(raw_clips_by_id) < len(PHONEME_INVENTORY):
         if progress_cb:
-            progress_cb("Extracting voiced syllables & spectral timbre from your recording...", 45)
+            progress_cb("Aligning spoken words & extracting raw glottal waveforms...", 45)
         corpus = UserVoiceCorpus(reference_audio, voice_profile, sr=SAMPLE_RATE)
         for item in PHONEME_INVENTORY:
             pid = item["id"]
             if pid not in raw_clips_by_id:
+                unshifted_word_clips[pid] = corpus.get_raw_word_slice(item)
                 raw_clips_by_id[pid] = corpus.synthesize_phoneme_from_user_voice(item)
                 from_local_corpus.add(pid)
 
@@ -229,4 +233,5 @@ async def generate_voicebank_samples(
         "voice_cleaned_up": voice_cleaned_up,
         "samples": samples_meta,
         "oto_lines": oto_lines,
+        "raw_word_clips": unshifted_word_clips,
     }

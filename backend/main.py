@@ -128,6 +128,7 @@ async def create_voicebank(
             samples_meta=gen_result["samples"],
             output_wav_path=daisy_wav_path,
             voice_profile=voice_profile,
+            raw_word_clips=gen_result.get("raw_word_clips"),
         )
 
         # 5. Package OpenUTAU .zip, character.txt, character.yaml, oto.ini, Daisy_Bell.ustx & .ust

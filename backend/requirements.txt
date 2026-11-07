@@ -10,3 +10,4 @@ pyyaml>=6.0.2
 pillow>=10.4.0
 python-dotenv>=1.0.1
 vosk>=0.3.45
+praat-parselmouth>=0.4.4

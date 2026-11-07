@@ -34,6 +34,10 @@ from .phonemes import PHONEME_INVENTORY, get_batches
 ELEVENLABS_BASE_URL = "https://api.elevenlabs.io/v1"
 
 
+class ElevenLabsError(RuntimeError):
+    """Raised when ElevenLabs synthesis fails and local fallback is disabled."""
+
+
 async def generate_voicebank_samples(
     reference_audio: np.ndarray,
     voice_profile: Dict[str, Any],
@@ -42,13 +46,18 @@ async def generate_voicebank_samples(
     api_key: Optional[str] = None,
     use_demo_mode: bool = False,
     auto_cleanup_voice: bool = True,
+    allow_fallback: bool = True,
     progress_cb: Optional[Callable[[str, int], None]] = None,
 ) -> Dict[str, Any]:
     """
     Generate all 48 UTAU phoneme WAV files and compute their oto.ini parameters.
     Returns metadata including sample list, oto entries, and synthesis mode used.
+    If allow_fallback is False, ElevenLabs failures raise ElevenLabsError instead of
+    silently switching to local mode.
     """
     resolved_key = (api_key or os.getenv("ELEVENLABS_API_KEY") or "").strip()
+    if not use_demo_mode and not resolved_key and not allow_fallback:
+        raise ElevenLabsError("No ElevenLabs API key provided.")
     base_note_hz = float(voice_profile.get("base_note_hz", 174.61))
     base_note_name = str(voice_profile.get("base_note_name", "F3"))
 
@@ -139,6 +148,8 @@ async def generate_voicebank_samples(
                 )
 
         except Exception as exc:
+            if not allow_fallback:
+                raise ElevenLabsError(str(exc)[:300]) from exc
             mode_used = "local_user_voice_corpus"
             mode_detail = (
                 f"Vosk Word-Aligned + Praat TD-PSOLA ({base_note_name} / {base_note_hz} Hz — "

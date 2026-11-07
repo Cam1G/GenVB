@@ -35,10 +35,12 @@ cp .env.example .env
 
 Then open **http://localhost:8000** in your browser!
 
+On first start the server downloads the Vosk `en-us` model (~40 MB). Without Vosk, the server still runs but Local mode, live script tracking (streamed to Vosk over the `/api/live` WebSocket) and the take-coverage check are disabled.
+
 ---
 
 ## Loading Your Voicebank in OpenUTAU
 
-1. Click **Download OpenUTAU Voicebank (`.zip`)** and **Download `Daisy_Bell.ustx`** in the Studio UI.
+1. Click **Download voicebank (.zip)** in the Studio UI (`Daisy_Bell.ustx` is included inside the zip).
 2. Open **OpenUTAU** and select `Tools -> Install Singer...`, then choose your downloaded `<SingerName>_OpenUTAU.zip` archive.
 3. Select `File -> Open...` and open `Daisy_Bell.ustx` (or create a new track, select your singer, and use either the **EN ARPA+** / **EN ARPA** phonemizer or the **Default** phonemizer).

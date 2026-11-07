@@ -36,6 +36,14 @@ ALIGNMENT_VOCABULARY: List[str] = [
 ]
 
 
+def get_coverage_map() -> List[Dict[str, Any]]:
+    """Per-phoneme list of spoken words that local mode can slice that phoneme from."""
+    return [
+        {"id": item["id"], "arpabet": item["arpabet"], "words": [w.lower() for w, _ in item["source_words"]]}
+        for item in PHONEME_INVENTORY
+    ]
+
+
 # 48 compact phoneme/diphone items.
 # `source_words` lists candidate (word, slice_mode) pairs from the user's aligned recording:
 #   - "full": entire aligned word

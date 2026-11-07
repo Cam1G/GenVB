@@ -88,6 +88,78 @@ def midi_to_note_name(midi_num: int) -> str:
     return f"{name}{octave}"
 
 
+VOSK_SAMPLE_RATE = 16000
+# Free (unrestricted) recognition: words below this confidence are discarded.
+VOSK_MIN_CONFIDENCE = 0.6
+_SCRIPT_VOCABULARY = {w for w in ALIGNMENT_VOCABULARY if w != "[unk]"}
+
+
+def create_vosk_recognizer(sample_rate: int = VOSK_SAMPLE_RATE) -> Optional[Any]:
+    """Unrestricted-vocabulary recognizer with word timings and confidences."""
+    model = get_vosk_model()
+    if model is None or KaldiRecognizer is None:
+        return None
+    rec = KaldiRecognizer(model, sample_rate)
+    rec.SetWords(True)
+    return rec
+
+
+def parse_vosk_words(result_json: str) -> List[Dict[str, Any]]:
+    """Confident words from a Vosk Result()/FinalResult() JSON string, in spoken order."""
+    words: List[Dict[str, Any]] = []
+    for w in json.loads(result_json).get("result", []):
+        word = str(w.get("word", "")).strip().lower()
+        if word == "im":
+            word = "i'm"
+        conf = float(w.get("conf", 0.0))
+        if not word or word == "[unk]" or conf < VOSK_MIN_CONFIDENCE:
+            continue
+        words.append({
+            "word": word,
+            "start": float(w.get("start", 0.0)),
+            "end": float(w.get("end", 0.0)),
+            "conf": round(conf, 3),
+        })
+    return words
+
+
+def filter_script_words(words: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keep only script-vocabulary words long enough to slice (shared by live + offline alignment)."""
+    return [w for w in words if w["word"] in _SCRIPT_VOCABULARY and w["end"] - w["start"] >= 0.05]
+
+
+def align_spoken_words(audio: np.ndarray, sr: int = SAMPLE_RATE) -> Dict[str, List[Tuple[float, float]]]:
+    """
+    Recognize the recording with free Vosk recognition and return
+    {script_word: [(start_sec, end_sec), ...]} for confident script-vocabulary words only.
+    """
+    aligned: Dict[str, List[Tuple[float, float]]] = {}
+    if len(audio) < sr // 3:
+        return aligned
+    rec = create_vosk_recognizer(VOSK_SAMPLE_RATE)
+    if rec is None:
+        return aligned
+
+    try:
+        x16 = resample_audio(audio, sr, VOSK_SAMPLE_RATE)
+        pcm16 = (np.clip(x16, -0.99, 0.99) * 32767.0).astype(np.int16).tobytes()
+
+        # Feed in chunks and collect every finished utterance; a single
+        # AcceptWaveform + FinalResult call can drop earlier utterances.
+        words: List[Dict[str, Any]] = []
+        chunk_bytes = VOSK_SAMPLE_RATE // 4 * 2
+        for i in range(0, len(pcm16), chunk_bytes):
+            if rec.AcceptWaveform(pcm16[i : i + chunk_bytes]):
+                words.extend(parse_vosk_words(rec.Result()))
+        words.extend(parse_vosk_words(rec.FinalResult()))
+
+        for w in filter_script_words(words):
+            aligned.setdefault(w["word"], []).append((w["start"], w["end"]))
+    except Exception:
+        pass
+    return aligned
+
+
 def choose_user_base_note(median_f0_hz: float) -> Tuple[float, str, int]:
     """
     Snap the UTAU base reference pitch to the musical semitone closest to the user's
@@ -509,6 +581,11 @@ def stretch_log_spectrum_smooth(sp_chunk: np.ndarray, target_frames: int) -> np.
     return np.exp(f_interp(dst_t))
 
 
+def prepare_corpus_audio(reference_audio: np.ndarray, sr: int = SAMPLE_RATE) -> np.ndarray:
+    """Preprocessing applied before word alignment; shared by generation and the coverage check."""
+    return soft_limit_audio(declip_vocal_waveform(reference_audio, sr), 0.58)
+
+
 class UserVoiceCorpus:
     """
     Word-Aligned Time-Domain User Voice Extractor (Vosk Forced Alignment + WSOLA + Praat TD-PSOLA).
@@ -528,7 +605,7 @@ class UserVoiceCorpus:
         self.formant_scale = float(voice_profile.get("formant_scale", 1.0))
         self.frame_period = 5.0
 
-        self.audio = soft_limit_audio(declip_vocal_waveform(reference_audio, sr), 0.58)
+        self.audio = prepare_corpus_audio(reference_audio, sr)
         self.aligned_words: Dict[str, List[Tuple[float, float]]] = {}
         self.fallback_syllables: List[np.ndarray] = []
 
@@ -536,28 +613,8 @@ class UserVoiceCorpus:
         self._extract_fallback_syllables()
 
     def _align_spoken_words(self) -> None:
-        model = get_vosk_model()
-        if model is None or KaldiRecognizer is None or len(self.audio) < self.sr // 3:
-            return
-
-        try:
-            x16 = resample_audio(self.audio, self.sr, 16000)
-            pcm16 = (np.clip(x16, -0.99, 0.99) * 32767.0).astype(np.int16).tobytes()
-
-            rec = KaldiRecognizer(model, 16000, json.dumps(ALIGNMENT_VOCABULARY))
-            rec.SetWords(True)
-            rec.AcceptWaveform(pcm16)
-            res = json.loads(rec.FinalResult())
-            words = res.get("result", [])
-
-            for w in words:
-                word_str = str(w.get("word", "")).strip().lower()
-                st = float(w.get("start", 0.0))
-                en = float(w.get("end", 0.0))
-                if word_str and word_str != "[unk]" and en - st >= 0.05:
-                    self.aligned_words.setdefault(word_str, []).append((st, en))
-        except Exception:
-            pass
+        for word, spans in align_spoken_words(self.audio, self.sr).items():
+            self.aligned_words.setdefault(word, []).extend(spans)
 
     def _extract_fallback_syllables(self) -> None:
         """Extract clean single-word voiced slices as fallbacks if a user said a custom sentence."""

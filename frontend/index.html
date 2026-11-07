@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenUTAU Voicebank Studio — Speak to Sing</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <div class="brand-logo" aria-hidden="true">
+        <span class="logo-bar b1"></span>
+        <span class="logo-bar b2"></span>
+        <span class="logo-bar b3"></span>
+        <span class="logo-bar b4"></span>
+      </div>
+      <div>
+        <h1>OpenUTAU Voicebank Studio</h1>
+        <p class="subtitle">Speak 1–3 sentences &rarr; Extract ARPAbet Voicebank &rarr; Sing <em>Daisy Bell</em> in OpenUTAU</p>
+      </div>
+    </div>
+    <div class="topbar-badges">
+      <span class="badge badge-cyan" id="badge-pyworld">WORLD Vocoder: C4 (261.63 Hz)</span>
+      <span class="badge badge-purple">EN ARPA+ &amp; CV Ready</span>
+      <span class="badge badge-emerald">44.1kHz 16-bit Mono PCM</span>
+    </div>
+  </header>
+
+  <main class="studio-container">
+    <!-- STEP 1: VOICE RECORDING & CHARACTER SETUP -->
+    <section class="studio-grid">
+      <!-- Left Panel: Teleprompter & Microphone Recorder -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="step-pill">STEP 1</span>
+          <h2>Speak Your Reference Sentences</h2>
+        </div>
+
+        <p class="panel-desc">
+          Read 1 to 3 sentences clearly at a natural pace (aim for <strong>10–25 seconds</strong> total), or upload an existing voice clip.
+        </p>
+
+        <!-- Teleprompter Sentence Selector -->
+        <div class="teleprompter-tabs" id="sentence-tabs" role="tablist">
+          <button type="button" class="tab-btn active" data-mode="all">All 3 Sentences (Recommended)</button>
+          <button type="button" class="tab-btn" data-mode="0">Sentence 1</button>
+          <button type="button" class="tab-btn" data-mode="1">Sentence 2</button>
+          <button type="button" class="tab-btn" data-mode="2">Sentence 3</button>
+        </div>
+
+        <div class="teleprompter-box" id="teleprompter-box">
+          <!-- Populated dynamically by recorder.js -->
+        </div>
+
+        <!-- Live Microphone Waveform Canvas -->
+        <div class="waveform-wrapper">
+          <canvas id="mic-waveform" width="680" height="110"></canvas>
+          <div class="recording-hud">
+            <span id="rec-status-dot" class="status-dot"></span>
+            <span id="rec-status-text">Ready to record</span>
+            <span id="rec-timer" class="rec-timer">00:00.0</span>
+          </div>
+        </div>
+
+        <!-- Recording & Upload Controls -->
+        <div class="recorder-actions">
+          <button type="button" id="btn-record" class="btn btn-record">
+            <span class="btn-icon">&#9679;</span> Start Recording
+          </button>
+          <label for="file-upload" class="btn btn-secondary file-label">
+            <span>&#8682;</span> Upload Audio (.wav / .mp3)
+            <input type="file" id="file-upload" accept="audio/*" hidden />
+          </label>
+        </div>
+
+        <!-- Recorded Audio Preview Bar -->
+        <div id="recorded-preview-bar" class="recorded-preview hidden">
+          <div class="preview-info">
+            <span class="badge badge-emerald" id="recorded-source-badge">Mic Recording</span>
+            <span id="recorded-filename" class="preview-filename">recording.wav</span>
+          </div>
+          <audio id="recorded-audio-el" controls></audio>
+        </div>
+      </div>
+
+      <!-- Right Panel: Singer Identity & Voice Cloning Settings -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="step-pill">STEP 2</span>
+          <h2>Singer Identity &amp; Voice Cloning Engine</h2>
+        </div>
+
+        <form id="generate-form" class="config-form">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="character-name">Voicebank / Singer Name</label>
+              <input type="text" id="character-name" value="Aria_UTAU" placeholder="e.g. Aria_UTAU" required />
+            </div>
+            <div class="form-group">
+              <label for="author-name">Voice Provider / Author</label>
+              <input type="text" id="author-name" value="GreatUniHack Creator" placeholder="Your Name" required />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="avatar-upload">Singer Avatar (Optional — auto-generates 100&times;100 UTAU BMP if omitted)</label>
+            <div class="avatar-picker">
+              <div class="avatar-preview" id="avatar-preview-box">AU</div>
+              <input type="file" id="avatar-upload" accept="image/*" />
+            </div>
+          </div>
+
+          <div class="engine-selector">
+            <label class="section-label">Synthesis Pipeline Mode</label>
+            <div class="radio-cards">
+              <label class="radio-card active" id="card-mode-eleven">
+                <input type="radio" name="engine_mode" value="elevenlabs" checked />
+                <div class="radio-card-body">
+                  <strong>ElevenLabs Instant Voice Cloning</strong>
+                  <span>Clones your timbre in the cloud + timestamp-aligned ARPAbet synthesis</span>
+                </div>
+              </label>
+              <label class="radio-card" id="card-mode-demo">
+                <input type="radio" name="engine_mode" value="demo" />
+                <div class="radio-card-body">
+                  <strong>Local Acoustic Timbre Transfer (Zero-Credit / Offline)</strong>
+                  <span>Extracts your F0, vocal tract scale &amp; harmonics locally without API credits</span>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div id="elevenlabs-settings" class="elevenlabs-box">
+            <div class="form-group">
+              <label for="elevenlabs-key">
+                ElevenLabs API Key
+                <span id="env-key-badge" class="badge badge-emerald hidden">Loaded from .env</span>
+              </label>
+              <input
+                type="password"
+                id="elevenlabs-key"
+                placeholder="xi-api-key (leave blank to use .env or automatic local fallback)"
+                autocomplete="off"
+              />
+            </div>
+            <label class="checkbox-row">
+              <input type="checkbox" id="auto-cleanup" checked />
+              <span>Auto-delete temporary ElevenLabs voice slot after generating WAVs (saves account slots)</span>
+            </label>
+          </div>
+
+          <button type="submit" id="btn-generate" class="btn btn-primary btn-large">
+            <span>&#10024;</span> Generate OpenUTAU Voicebank &amp; Sing &ldquo;Daisy Bell&rdquo;
+          </button>
+        </form>
+
+        <!-- Pipeline Progress Stepper -->
+        <div id="pipeline-progress" class="pipeline-box hidden">
+          <div class="pipeline-header">
+            <span class="spinner"></span>
+            <strong id="pipeline-stage-text">Initializing voicebank pipeline...</strong>
+          </div>
+          <div class="progress-bar-track">
+            <div id="pipeline-progress-fill" class="progress-bar-fill" style="width: 10%"></div>
+          </div>
+          <ul class="pipeline-steps" id="pipeline-step-list">
+            <li data-step="1">1. Decode 44.1kHz Reference Audio &amp; Extract Vocal Tract Profile</li>
+            <li data-step="2">2. ElevenLabs Instant Voice Cloning &amp; 4-Batch ARPAbet Synthesis</li>
+            <li data-step="3">3. WORLD Vocoder Pitch Flattening to Steady C4 (261.63 Hz)</li>
+            <li data-step="4">4. Acoustic Onset Detection &amp; <code>oto.ini</code> Parameter Calculation</li>
+            <li data-step="5">5. UTAU Resampler: Rendering <em>Daisy Bell (Bicycle Built for Two)</em></li>
+            <li data-step="6">6. Packaging OpenUTAU <code>.zip</code> + <code>Daisy_Bell.ustx</code></li>
+          </ul>
+        </div>
+
+        <div id="error-banner" class="error-banner hidden"></div>
+      </div>
+    </section>
+
+    <!-- STEP 3: GENERATED VOICEBANK STUDIO, DAISY BELL PLAYER & OTO.INI INSPECTOR -->
+    <section id="results-section" class="results-section hidden">
+      <!-- Hero Row: Daisy Bell Performance + Download Center -->
+      <div class="results-hero-grid">
+        <!-- Daisy Bell Synchronized Vocal Synth Player -->
+        <div class="panel daisy-panel">
+          <div class="daisy-header">
+            <div class="singer-identity">
+              <img id="result-avatar" src="" alt="Singer Avatar" class="result-avatar" />
+              <div>
+                <div class="singer-title-row">
+                  <h2 id="result-singer-name">Aria_UTAU</h2>
+                  <span class="badge badge-cyan" id="result-mode-badge">WORLD Vocoder C4</span>
+                </div>
+                <p id="result-mode-detail" class="subtitle"></p>
+              </div>
+            </div>
+            <div class="telemetry-pills" id="telemetry-pills">
+              <!-- Populated with detected user F0, vocal tract scale, sample count -->
+            </div>
+          </div>
+
+          <div class="daisy-stage">
+            <div class="daisy-stage-top">
+              <div>
+                <span class="step-pill pill-gold">&#9835; FEATURED DEMO TRACK</span>
+                <h3>&ldquo;Daisy Bell (Bicycle Built for Two)&rdquo;</h3>
+                <p class="panel-desc">Rendered directly from your generated OpenUTAU <code>.wav</code> samples and <code>oto.ini</code> timings</p>
+              </div>
+              <div class="active-note-hud">
+                <div class="hud-item">
+                  <span class="hud-label">Active Alias</span>
+                  <strong id="hud-alias">[ - ]</strong>
+                </div>
+                <div class="hud-item">
+                  <span class="hud-label">Target Pitch</span>
+                  <strong id="hud-pitch">C4 (261.6 Hz)</strong>
+                </div>
+              </div>
+            </div>
+
+            <!-- Synchronized Piano-Roll / Spectrum Visualizer -->
+            <canvas id="daisy-canvas" width="760" height="145"></canvas>
+
+            <!-- Synchronized Karaoke Lyrics Ribbon -->
+            <div id="daisy-lyrics-ribbon" class="lyrics-ribbon">
+              <!-- Populated with timed lyric pills -->
+            </div>
+
+            <!-- Audio Player Bar -->
+            <div class="daisy-player-controls">
+              <button type="button" id="btn-play-daisy" class="btn btn-primary">
+                &#9654; Play Daisy Bell
+              </button>
+              <audio id="daisy-audio-el" controls preload="auto"></audio>
+            </div>
+          </div>
+        </div>
+
+        <!-- Download & OpenUTAU Quick-Start Center -->
+        <div class="panel export-panel">
+          <div class="panel-header">
+            <span class="step-pill pill-emerald">EXPORT</span>
+            <h2>OpenUTAU Bundle</h2>
+          </div>
+
+          <p class="panel-desc">
+            Your voicebank is packaged with <code>character.txt</code>, <code>character.yaml</code>, <code>oto.ini</code>, <code>prefix.map</code>, <code>avatar.bmp</code>, and 48 pitch-flattened 44.1kHz 16-bit mono WAVs.
+          </p>
+
+          <div class="download-stack">
+            <a id="dl-voicebank-zip" href="#" download class="btn btn-download-primary">
+              <span class="dl-icon">&#128230;</span>
+              <div>
+                <strong>Download OpenUTAU Voicebank (.zip)</strong>
+                <small>Drag &amp; drop into OpenUTAU (Tools &rarr; Install Singer)</small>
+              </div>
+            </a>
+
+            <a id="dl-daisy-ustx" href="#" download class="btn btn-download-secondary">
+              <span class="dl-icon">&#127929;</span>
+              <div>
+                <strong>Download Daisy_Bell.ustx</strong>
+                <small>Native OpenUTAU project pre-loaded with Daisy Bell</small>
+              </div>
+            </a>
+
+            <div class="download-mini-row">
+              <a id="dl-daisy-ust" href="#" download class="btn btn-ghost btn-sm">&#8681; Classic .ust</a>
+              <a id="dl-daisy-wav" href="#" download class="btn btn-ghost btn-sm">&#8681; Daisy_Bell.wav</a>
+              <a id="dl-oto-ini" href="#" download class="btn btn-ghost btn-sm">&#8681; Raw oto.ini</a>
+            </div>
+          </div>
+
+          <div class="openutau-guide">
+            <h4>How to Load in OpenUTAU (30 Seconds)</h4>
+            <ol>
+              <li>Open <strong>OpenUTAU</strong> and click <code>Tools &rarr; Install Singer...</code></li>
+              <li>Select your downloaded <code>_OpenUTAU.zip</code> file.</li>
+              <li>Click <code>File &rarr; Open...</code> and load <code>Daisy_Bell.ustx</code> (or type any English lyrics using the <strong>EN ARPA+</strong> or <strong>Default</strong> phonemizer!).</li>
+            </ol>
+          </div>
+        </div>
+      </div>
+
+      <!-- Interactive oto.ini & Phoneme Sample Waveform Inspector -->
+      <div class="panel oto-panel">
+        <div class="oto-header-row">
+          <div>
+            <span class="step-pill">UNDER THE HOOD</span>
+            <h2>Interactive <code>oto.ini</code> Phoneme &amp; Boundary Inspector</h2>
+            <p class="panel-desc">
+              Click any of the 48 generated ARPAbet samples to play the C4-flattened WAV and inspect its UTAU timing boundaries.
+            </p>
+          </div>
+          <div class="oto-filter-controls">
+            <input type="search" id="phoneme-search" placeholder="Search alias or word (e.g. d ey, aa,zee)..." />
+            <div class="filter-pills" id="phoneme-filter-pills">
+              <button type="button" class="pill-btn active" data-filter="all">All (48)</button>
+              <button type="button" class="pill-btn" data-filter="vowel">Vowels (15)</button>
+              <button type="button" class="pill-btn" data-filter="cv">CV Syllables</button>
+              <button type="button" class="pill-btn" data-filter="vc">VC Codas</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="oto-inspector-layout">
+          <!-- Left: Scrollable Sample Grid -->
+          <div class="sample-list" id="sample-list">
+            <!-- Populated by otoInspector.js -->
+          </div>
+
+          <!-- Right: High-DPI Waveform + UTAU Parameter Markers -->
+          <div class="oto-viewer">
+            <div class="oto-viewer-top">
+              <div>
+                <h3 id="oto-selected-title">01_aa.wav — &ldquo;ah&rdquo;</h3>
+                <p id="oto-selected-desc" class="subtitle">Open back unrounded vowel</p>
+              </div>
+              <button type="button" id="btn-play-sample" class="btn btn-secondary">
+                &#9654; Play Sample (C4)
+              </button>
+            </div>
+
+            <div class="oto-canvas-wrap">
+              <canvas id="oto-canvas" width="760" height="210"></canvas>
+            </div>
+
+            <!-- Legend for UTAU oto.ini parameters -->
+            <div class="oto-legend" id="oto-metrics-grid">
+              <div class="oto-metric m-offset">
+                <span class="metric-dot"></span>
+                <div>
+                  <small>Offset (Left Blank)</small>
+                  <strong id="val-offset">65.0 ms</strong>
+                </div>
+              </div>
+              <div class="oto-metric m-overlap">
+                <span class="metric-dot"></span>
+                <div>
+                  <small>Overlap (OVL)</small>
+                  <strong id="val-overlap">20.0 ms</strong>
+                </div>
+              </div>
+              <div class="oto-metric m-preutt">
+                <span class="metric-dot"></span>
+                <div>
+                  <small>Preutterance</small>
+                  <strong id="val-preutt">45.0 ms</strong>
+                </div>
+              </div>
+              <div class="oto-metric m-consonant">
+                <span class="metric-dot"></span>
+                <div>
+                  <small>Consonant (Fixed)</small>
+                  <strong id="val-consonant">95.0 ms</strong>
+                </div>
+              </div>
+              <div class="oto-metric m-cutoff">
+                <span class="metric-dot"></span>
+                <div>
+                  <small>Cutoff (Right Blank)</small>
+                  <strong id="val-cutoff">-85.0 ms</strong>
+                </div>
+              </div>
+            </div>
+
+            <div class="oto-raw-line-box">
+              <span class="code-label">oto.ini entry:</span>
+              <code id="oto-raw-line">01_aa.wav=aa,65.0,75.0,-85.0,25.0,15.0</code>
+              <div id="oto-aliases-list" class="alias-chips"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

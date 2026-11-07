@@ -4,9 +4,9 @@
  * → engine choice → loading → result / error.
  */
 
-import { MicRecorder } from "./recorder.js";
-import { LiveRecognizer } from "./liveRecognizer.js";
-import { buildScript, classifyWord, computeCoverage, normalizeWord, scriptCursor, tokenize } from "./coverage.js";
+import { MicRecorder } from "./recorder.js?v=20261107";
+import { LiveRecognizer } from "./liveRecognizer.js?v=20261107";
+import { buildScript, classifyWord, computeCoverage, normalizeWord, scriptCursor, tokenize } from "./coverage.js?v=20261107";
 
 const MIN_RECORDING_SEC = 1.5;
 const MORPH_MS = 450;

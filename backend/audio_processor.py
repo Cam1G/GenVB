@@ -89,17 +89,17 @@ def midi_to_note_name(midi_num: int) -> str:
 
 
 VOSK_SAMPLE_RATE = 16000
-# Free (unrestricted) recognition: words below this confidence are discarded.
-VOSK_MIN_CONFIDENCE = 0.6
+# Grammar-guided recognition threshold so British/regional vowel pronunciations are not dropped.
+VOSK_MIN_CONFIDENCE = 0.25
 _SCRIPT_VOCABULARY = {w for w in ALIGNMENT_VOCABULARY if w != "[unk]"}
 
 
 def create_vosk_recognizer(sample_rate: int = VOSK_SAMPLE_RATE) -> Optional[Any]:
-    """Unrestricted-vocabulary recognizer with word timings and confidences."""
+    """Grammar-guided recognizer with word timings and confidences."""
     model = get_vosk_model()
     if model is None or KaldiRecognizer is None:
         return None
-    rec = KaldiRecognizer(model, sample_rate)
+    rec = KaldiRecognizer(model, sample_rate, json.dumps(ALIGNMENT_VOCABULARY))
     rec.SetWords(True)
     return rec
 

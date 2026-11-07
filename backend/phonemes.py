@@ -8,31 +8,36 @@ from typing import Any, Dict, List
 TELEPROMPTER_SENTENCES: List[Dict[str, str]] = [
     {
         "id": "sentence_1",
-        "title": "Sentence 1 — Daisy Bell Chorus & Bright Vowels (Hold Vowels Gently)",
-        "text": "Daisy Bell, give me your answer do, riding a shiny yellow bicycle across the sunny bay.",
-        "focus": "Tip: Hold open vowels slightly ('Daaai-syyy', 'doooo') to give your voicebank rich, natural sustain.",
+        "title": "Sentence 1 — Bright Vowels & Diphthongs",
+        "text": "Every sunny day brings easy meaning, while a crane glides above the calm ocean bay.",
+        "focus": "Covers pure vowels and diphthongs (ey, iy, ay, aa, ow, ah) from everyday speech.",
     },
     {
         "id": "sentence_2",
-        "title": "Sentence 2 — Plosives, Nasals & Liquids",
-        "text": "Quick brown foxes jump over the lazy dog while singing a warm melody.",
-        "focus": "Covers plosives (p, b, t, d, k, g), affricates (jh, ch), nasals (m, n, ng), and liquids (l, r, w).",
+        "title": "Sentence 2 — Plosives, Liquids & Sibilants",
+        "text": "Quick brown foxes jump over the lazy dog, chasing yellow shadows through a warm forest.",
+        "focus": "Covers plosives (p, b, t, d, k, g), affricates (jh, ch), fricatives (f, v, th, sh, z), and liquids (l, r, w).",
     },
     {
         "id": "sentence_3",
-        "title": "Sentence 3 — Sustained Resonance & Lyric Finale (Hold Vowels Gently)",
-        "text": "I'm half crazy, all for the love of you, our voices echo clearly through the night.",
-        "focus": "Tip: Speak warmly and linger slightly on 'haaaalf craaa-zyyy' and 'youuuu' for maximum naturalness.",
+        "title": "Sentence 3 — Resonance, Nasals & Cadence",
+        "text": "Happy voices always echo clearly at night, singing a lovely melody before the morning dew.",
+        "focus": "Covers nasals (m, n, ng), aspirates (hh), rounded vowels (ao, oy, uw), and smooth transitions.",
     },
 ]
 
-# Full vocabulary of words used across current and previous teleprompter prompts for Vosk forced alignment
+# Full vocabulary of words across the teleprompter prompts (plus legacy fallback words) for Vosk alignment
 ALIGNMENT_VOCABULARY: List[str] = [
+    "every", "sunny", "day", "brings", "easy", "meaning", "while", "a", "crane", "glides",
+    "above", "the", "calm", "ocean", "bay",
+    "quick", "brown", "foxes", "fox", "jump", "over", "lazy", "dog", "chasing", "yellow",
+    "shadows", "through", "warm", "forest",
+    "happy", "voices", "always", "echo", "clearly", "at", "night", "singing", "lovely",
+    "melody", "before", "morning", "dew",
+    # Legacy prompt words retained so older recorded sessions on disk continue to align
     "daisy", "bell", "give", "gave", "me", "your", "answer", "do", "riding", "to", "ride",
-    "a", "shiny", "yellow", "bicycle", "across", "the", "sunny", "bay", "by",
-    "quick", "brown", "foxes", "fox", "jump", "over", "lazy", "dog", "while", "singing", "warm", "melody",
-    "i'm", "im", "half", "crazy", "all", "off", "for", "love", "of", "you", "our", "voices", "echo",
-    "clearly", "through", "night", "[unk]",
+    "shiny", "bicycle", "across", "by", "i'm", "im", "half", "crazy", "all", "off", "for",
+    "love", "of", "you", "our", "[unk]",
 ]
 
 
@@ -47,10 +52,10 @@ def get_coverage_map() -> List[Dict[str, Any]]:
 # 48 compact phoneme/diphone items.
 # `source_words` lists candidate (word, slice_mode) pairs from the user's aligned recording:
 #   - "full": entire aligned word
-#   - "pre_sibilant": first syllable up to internal sibilant (-z- or -s-, e.g. "Dai-" in "daisy", "cra-" in "crazy")
-#   - "from_sibilant": second syllable starting at internal sibilant (e.g. "-sy" in "daisy", "-zy" in "crazy")
-#   - "first_half": first 55% of word
-#   - "second_half": last 55% of word
+#   - "pre_sibilant": first syllable up to internal sibilant (-z- or -s-)
+#   - "from_sibilant": second syllable starting at internal sibilant
+#   - "first_half": first 58% of word
+#   - "second_half": last 60% of word
 #   - "vowel_core": interior 65% vowel nucleus of word
 PHONEME_INVENTORY: List[Dict[str, Any]] = [
     # --- BATCH 1: Core 15 English ARPAbet Vowels ---
@@ -62,9 +67,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vowel",
         "consonant_kind": None,
         "formants": (730, 1090, 2440),
-        "source_words": [("half", "vowel_core"), ("foxes", "vowel_core"), ("dog", "vowel_core"), ("across", "first_half")],
+        "source_words": [("calm", "vowel_core"), ("foxes", "vowel_core"), ("dog", "vowel_core"), ("half", "vowel_core")],
         "aliases": ["aa", "- aa", "aa -", "a", "- a"],
-        "description": "Open vowel (father, half, palm)",
+        "description": "Open vowel (calm, father, palm)",
     },
     {
         "id": "02_ae",
@@ -74,9 +79,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vowel",
         "consonant_kind": None,
         "formants": (660, 1720, 2410),
-        "source_words": [("half", "vowel_core"), ("answer", "pre_sibilant"), ("across", "first_half")],
+        "source_words": [("happy", "first_half"), ("at", "full"), ("shadows", "first_half"), ("half", "vowel_core")],
         "aliases": ["ae", "- ae", "ae -", "ae n", "ae f"],
-        "description": "Front open vowel (cat, answer, half)",
+        "description": "Front open vowel (happy, at, shadow)",
     },
     {
         "id": "03_ah",
@@ -86,9 +91,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vowel",
         "consonant_kind": None,
         "formants": (640, 1190, 2390),
-        "source_words": [("love", "vowel_core"), ("sunny", "vowel_core"), ("jump", "vowel_core"), ("the", "vowel_core")],
+        "source_words": [("sunny", "vowel_core"), ("lovely", "first_half"), ("above", "second_half"), ("jump", "vowel_core"), ("love", "vowel_core")],
         "aliases": ["ah", "- ah", "ah -", "ax", "ah v"],
-        "description": "Mid central vowel (love, sunny, the)",
+        "description": "Mid central vowel (sunny, lovely, above)",
     },
     {
         "id": "04_ao",
@@ -98,9 +103,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vowel",
         "consonant_kind": None,
         "formants": (570, 840, 2410),
-        "source_words": [("all", "vowel_core"), ("warm", "vowel_core"), ("for", "vowel_core"), ("dog", "vowel_core")],
+        "source_words": [("always", "pre_sibilant"), ("warm", "vowel_core"), ("forest", "first_half"), ("before", "second_half"), ("all", "vowel_core")],
         "aliases": ["ao", "- ao", "ao -", "o", "- o", "ao l", "ao r"],
-        "description": "Open-mid back rounded vowel (all, warm, for)",
+        "description": "Open-mid back rounded vowel (always, warm, forest)",
     },
     {
         "id": "05_aw",
@@ -112,7 +117,7 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "formants": (680, 1100, 2400),
         "source_words": [("brown", "vowel_core"), ("our", "full")],
         "aliases": ["aw", "- aw", "aw -"],
-        "description": "Diphthong (brown, our, now)",
+        "description": "Diphthong (brown, now)",
     },
     {
         "id": "06_ay",
@@ -122,9 +127,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vowel",
         "consonant_kind": None,
         "formants": (700, 1550, 2450),
-        "source_words": [("i'm", "full"), ("while", "vowel_core"), ("ride", "vowel_core"), ("night", "vowel_core"), ("shiny", "first_half")],
+        "source_words": [("while", "vowel_core"), ("glides", "pre_sibilant"), ("night", "vowel_core"), ("i'm", "full")],
         "aliases": ["ay", "- ay", "ay -", "ay m"],
-        "description": "Diphthong (I'm, ride, while, night)",
+        "description": "Diphthong (while, glides, night)",
     },
     {
         "id": "07_eh",
@@ -134,9 +139,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vowel",
         "consonant_kind": None,
         "formants": (530, 1840, 2480),
-        "source_words": [("bell", "vowel_core"), ("echo", "first_half"), ("melody", "first_half"), ("yellow", "first_half")],
+        "source_words": [("every", "first_half"), ("echo", "first_half"), ("melody", "first_half"), ("yellow", "first_half"), ("bell", "vowel_core")],
         "aliases": ["eh", "- eh", "eh -", "e", "- e", "eh l"],
-        "description": "Open-mid front vowel (bell, echo, melody)",
+        "description": "Open-mid front vowel (every, echo, melody)",
     },
     {
         "id": "08_er",
@@ -146,9 +151,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vowel",
         "consonant_kind": "liquid",
         "formants": (490, 1350, 1690),
-        "source_words": [("over", "second_half"), ("answer", "from_sibilant"), ("clearly", "first_half")],
+        "source_words": [("over", "second_half"), ("clearly", "first_half"), ("every", "second_half"), ("answer", "from_sibilant")],
         "aliases": ["er", "- er", "er -", "r", "er d"],
-        "description": "R-colored central vowel (over, answer)",
+        "description": "R-colored central vowel (over, clearly)",
     },
     {
         "id": "09_ey",
@@ -158,9 +163,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vowel",
         "consonant_kind": None,
         "formants": (420, 2050, 2600),
-        "source_words": [("bay", "vowel_core"), ("daisy", "pre_sibilant"), ("crazy", "pre_sibilant"), ("lazy", "pre_sibilant")],
+        "source_words": [("day", "vowel_core"), ("bay", "vowel_core"), ("crane", "vowel_core"), ("lazy", "pre_sibilant"), ("daisy", "pre_sibilant")],
         "aliases": ["ey", "- ey", "ey -", "ey z", "ey n"],
-        "description": "Diphthong (bay, Daisy, crazy)",
+        "description": "Diphthong (day, bay, crane, lazy)",
     },
     {
         "id": "10_ih",
@@ -170,9 +175,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vowel",
         "consonant_kind": None,
         "formants": (390, 1990, 2550),
-        "source_words": [("give", "vowel_core"), ("quick", "vowel_core"), ("singing", "first_half")],
+        "source_words": [("quick", "vowel_core"), ("brings", "pre_sibilant"), ("singing", "first_half"), ("give", "vowel_core")],
         "aliases": ["ih", "- ih", "ih -", "ih v", "ih n"],
-        "description": "Near-close front vowel (give, quick, singing)",
+        "description": "Near-close front vowel (quick, brings, singing)",
     },
     {
         "id": "11_iy",
@@ -182,9 +187,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vowel",
         "consonant_kind": None,
         "formants": (270, 2290, 3010),
-        "source_words": [("me", "vowel_core"), ("daisy", "from_sibilant"), ("sunny", "second_half"), ("clearly", "second_half")],
+        "source_words": [("easy", "first_half"), ("meaning", "first_half"), ("sunny", "second_half"), ("clearly", "second_half"), ("me", "vowel_core")],
         "aliases": ["iy", "- iy", "iy -", "i", "- i"],
-        "description": "Close front vowel (me, Daisy, sunny)",
+        "description": "Close front vowel (easy, meaning, sunny)",
     },
     {
         "id": "12_ow",
@@ -194,9 +199,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vowel",
         "consonant_kind": None,
         "formants": (450, 950, 2400),
-        "source_words": [("over", "first_half"), ("echo", "second_half"), ("yellow", "second_half")],
+        "source_words": [("ocean", "pre_sibilant"), ("over", "first_half"), ("echo", "second_half"), ("yellow", "second_half")],
         "aliases": ["ow", "- ow", "ow -"],
-        "description": "Diphthong (over, echo, yellow)",
+        "description": "Diphthong (ocean, over, echo, yellow)",
     },
     {
         "id": "13_oy",
@@ -218,9 +223,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vowel",
         "consonant_kind": None,
         "formants": (440, 1020, 2240),
-        "source_words": [("love", "vowel_core"), ("you", "vowel_core")],
+        "source_words": [("lovely", "first_half"), ("above", "second_half"), ("through", "vowel_core"), ("love", "vowel_core")],
         "aliases": ["uh", "- uh", "uh -"],
-        "description": "Near-close back vowel (foot, Northern love)",
+        "description": "Near-close back vowel (lovely, above)",
     },
     {
         "id": "15_uw",
@@ -230,12 +235,12 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vowel",
         "consonant_kind": None,
         "formants": (300, 870, 2240),
-        "source_words": [("you", "vowel_core"), ("do", "vowel_core"), ("through", "vowel_core")],
+        "source_words": [("dew", "vowel_core"), ("through", "vowel_core"), ("do", "vowel_core"), ("you", "vowel_core")],
         "aliases": ["uw", "- uw", "uw -", "u", "- u"],
-        "description": "Close back rounded vowel (you, do, through)",
+        "description": "Close back rounded vowel (dew, through)",
     },
 
-    # --- BATCH 2: Daisy Bell Core Lyric Syllables (Directly Sliced from User's Spoken Words) ---
+    # --- BATCH 2: Core Diphone Syllables ---
     {
         "id": "16_d_ey",
         "batch": 2,
@@ -244,9 +249,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "stop_voiced",
         "formants": (420, 2050, 2600),
-        "source_words": [("daisy", "pre_sibilant"), ("bay", "full"), ("gave", "full")],
+        "source_words": [("day", "full"), ("bay", "full"), ("daisy", "pre_sibilant")],
         "aliases": ["d ey", "- d ey", "dey", "da", "de", "d"],
-        "description": "Spoken 'Dai-' from your recording of 'Daisy'",
+        "description": "Spoken 'day' from your recording",
     },
     {
         "id": "17_z_iy",
@@ -256,9 +261,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "fricative_voiced",
         "formants": (270, 2290, 3010),
-        "source_words": [("daisy", "from_sibilant"), ("crazy", "from_sibilant"), ("lazy", "from_sibilant")],
+        "source_words": [("easy", "from_sibilant"), ("lazy", "from_sibilant"), ("daisy", "from_sibilant"), ("crazy", "from_sibilant")],
         "aliases": ["z iy", "ziy", "zi", "za", "z"],
-        "description": "Spoken '-sy / -zy' from your recording of 'Daisy / crazy'",
+        "description": "Spoken '-sy / -zy' from 'easy' and 'lazy'",
     },
     {
         "id": "18_g_ih",
@@ -268,9 +273,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "stop_voiced",
         "formants": (390, 1990, 2550),
-        "source_words": [("give", "full"), ("gave", "full"), ("quick", "full")],
+        "source_words": [("glides", "pre_sibilant"), ("quick", "full"), ("brings", "pre_sibilant"), ("give", "full")],
         "aliases": ["g ih", "- g ih", "giv", "gi", "ga", "g"],
-        "description": "Spoken 'give / gave' from your recording",
+        "description": "Voiced velar stop onset ('glides', 'quick')",
     },
     {
         "id": "19_m_iy",
@@ -280,9 +285,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "nasal",
         "formants": (270, 2290, 3010),
-        "source_words": [("me", "full"), ("melody", "first_half")],
+        "source_words": [("meaning", "first_half"), ("melody", "first_half"), ("me", "full")],
         "aliases": ["m iy", "- m iy", "v m", "mi", "ma", "m"],
-        "description": "Spoken 'me' from your recording",
+        "description": "Spoken 'mea-' from 'meaning'",
     },
     {
         "id": "20_y_ao",
@@ -292,9 +297,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "glide",
         "formants": (540, 920, 2350),
-        "source_words": [("your", "full"), ("warm", "full"), ("for", "full"), ("yellow", "first_half")],
+        "source_words": [("yellow", "first_half"), ("warm", "full"), ("before", "second_half"), ("your", "full")],
         "aliases": ["y ao", "- y ao", "yor", "yo", "ya", "y"],
-        "description": "Spoken 'your / warm' from your recording",
+        "description": "Palatal glide ('yellow', 'warm')",
     },
     {
         "id": "21_ae_n",
@@ -304,9 +309,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vc",
         "consonant_kind": "nasal",
         "formants": (640, 1700, 2410),
-        "source_words": [("answer", "pre_sibilant"), ("across", "pre_sibilant"), ("half", "full")],
+        "source_words": [("at", "full"), ("happy", "first_half"), ("chasing", "first_half"), ("answer", "pre_sibilant")],
         "aliases": ["r ae", "- ae n", "an", "na", "n"],
-        "description": "Spoken 'an-' from your recording",
+        "description": "Front vowel to nasal transition ('at', 'happy')",
     },
     {
         "id": "22_s_er",
@@ -316,9 +321,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "sibilant",
         "formants": (490, 1350, 1690),
-        "source_words": [("answer", "from_sibilant"), ("sunny", "first_half"), ("across", "from_sibilant")],
+        "source_words": [("sunny", "first_half"), ("singing", "first_half"), ("answer", "from_sibilant")],
         "aliases": ["s er", "n s", "ser", "sa", "su", "s"],
-        "description": "Spoken '-swer / su-' from your recording",
+        "description": "Sibilant syllable ('sunny', 'singing')",
     },
     {
         "id": "23_d_uw",
@@ -328,9 +333,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "stop_voiced",
         "formants": (300, 870, 2240),
-        "source_words": [("do", "full"), ("to", "full"), ("through", "full"), ("you", "full")],
+        "source_words": [("dew", "full"), ("through", "full"), ("do", "full"), ("you", "full")],
         "aliases": ["d uw", "- d uw", "du", "do"],
-        "description": "Spoken 'do / through / you' from your recording",
+        "description": "Spoken 'dew / through' from your recording",
     },
     {
         "id": "24_hh_ae",
@@ -340,12 +345,12 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "aspirate",
         "formants": (660, 1720, 2410),
-        "source_words": [("half", "full")],
+        "source_words": [("happy", "first_half"), ("calm", "full"), ("half", "full")],
         "aliases": ["hh ae", "- hh ae", "haf", "ha", "hh"],
-        "description": "Spoken 'half' in your natural accent",
+        "description": "Aspirate onset ('happy', 'calm')",
     },
 
-    # --- BATCH 3: More Daisy Bell Lyrics + Plosives & Fricatives ---
+    # --- BATCH 3: Plosives, Clusters & Fricatives ---
     {
         "id": "25_k_r_ey",
         "batch": 3,
@@ -354,9 +359,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "stop_unvoiced",
         "formants": (420, 2050, 2600),
-        "source_words": [("crazy", "pre_sibilant")],
+        "source_words": [("crane", "first_half"), ("quick", "full"), ("crazy", "pre_sibilant")],
         "aliases": ["k r", "r ey", "k ey", "kray", "ka", "k"],
-        "description": "Spoken 'cra-' from your recording of 'crazy'",
+        "description": "Spoken 'cra-' from your recording of 'crane'",
     },
     {
         "id": "26_f_ao",
@@ -366,9 +371,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "fricative_unvoiced",
         "formants": (570, 840, 2410),
-        "source_words": [("for", "full"), ("foxes", "pre_sibilant")],
+        "source_words": [("forest", "first_half"), ("before", "second_half"), ("foxes", "pre_sibilant"), ("for", "full")],
         "aliases": ["f ao", "- f ao", "for", "fa", "fo", "f"],
-        "description": "Spoken 'for' from your recording",
+        "description": "Spoken 'for-' from 'forest' and 'before'",
     },
     {
         "id": "27_dh_ah",
@@ -390,9 +395,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "liquid",
         "formants": (640, 1190, 2390),
-        "source_words": [("love", "full"), ("lazy", "pre_sibilant"), ("melody", "second_half")],
+        "source_words": [("lovely", "first_half"), ("lazy", "pre_sibilant"), ("melody", "second_half"), ("love", "full")],
         "aliases": ["l ah", "- l ah", "luv", "la", "lu", "l"],
-        "description": "Spoken 'love' in your natural accent",
+        "description": "Spoken 'love-' from 'lovely'",
     },
     {
         "id": "29_v_ah",
@@ -402,9 +407,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "fricative_voiced",
         "formants": (640, 1190, 2390),
-        "source_words": [("of", "full"), ("over", "full"), ("voices", "pre_sibilant")],
+        "source_words": [("above", "second_half"), ("over", "full"), ("every", "second_half"), ("voices", "pre_sibilant"), ("of", "full")],
         "aliases": ["v ah", "v y", "uv", "va", "v"],
-        "description": "Spoken 'of' from your recording",
+        "description": "Voiced labiodental fricative ('above', 'over')",
     },
     {
         "id": "30_y_uw",
@@ -414,9 +419,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "glide",
         "formants": (300, 870, 2240),
-        "source_words": [("you", "full"), ("yellow", "first_half")],
+        "source_words": [("dew", "full"), ("yellow", "first_half"), ("through", "full"), ("you", "full")],
         "aliases": ["y uw", "- y uw", "yoo", "yu"],
-        "description": "Spoken 'you' from your recording",
+        "description": "Rounded high-back syllable ('dew', 'through')",
     },
     {
         "id": "31_b_aa",
@@ -426,9 +431,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "stop_voiced",
         "formants": (730, 1090, 2440),
-        "source_words": [("bay", "full"), ("bell", "full"), ("bicycle", "pre_sibilant"), ("brown", "full")],
+        "source_words": [("bay", "full"), ("before", "first_half"), ("brown", "full"), ("bell", "full")],
         "aliases": ["b aa", "- b aa", "b eh", "ba", "be", "b"],
-        "description": "Voiced bilabial stop ('bay', 'Bell', 'bicycle')",
+        "description": "Voiced bilabial stop ('bay', 'before', 'brown')",
     },
     {
         "id": "32_p_aa",
@@ -438,9 +443,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "stop_unvoiced",
         "formants": (730, 1090, 2440),
-        "source_words": [("jump", "second_half"), ("bay", "full")],
+        "source_words": [("happy", "second_half"), ("jump", "second_half"), ("bay", "full")],
         "aliases": ["p aa", "- p aa", "pa", "p"],
-        "description": "Bilabial stop ('jump')",
+        "description": "Bilabial stop ('happy', 'jump')",
     },
     {
         "id": "33_t_aa",
@@ -450,9 +455,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "stop_unvoiced",
         "formants": (730, 1090, 2440),
-        "source_words": [("to", "full"), ("night", "second_half"), ("daisy", "pre_sibilant")],
+        "source_words": [("at", "full"), ("night", "second_half"), ("day", "full")],
         "aliases": ["t aa", "- t aa", "t uw", "ta", "tu", "to", "t"],
-        "description": "Alveolar stop ('to', 'night')",
+        "description": "Alveolar stop ('at', 'night')",
     },
     {
         "id": "34_ch_aa",
@@ -462,9 +467,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "sibilant",
         "formants": (730, 1090, 2440),
-        "source_words": [("jump", "full"), ("shiny", "first_half")],
+        "source_words": [("chasing", "pre_sibilant"), ("jump", "full")],
         "aliases": ["ch aa", "- ch aa", "cha", "ch"],
-        "description": "Postalveolar affricate",
+        "description": "Postalveolar affricate ('chasing')",
     },
     {
         "id": "35_jh_aa",
@@ -486,9 +491,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "sibilant",
         "formants": (730, 1090, 2440),
-        "source_words": [("shiny", "first_half")],
+        "source_words": [("shadows", "first_half"), ("ocean", "from_sibilant"), ("shiny", "first_half")],
         "aliases": ["sh aa", "- sh aa", "sha", "sh"],
-        "description": "Spoken 'shi-' from your recording of 'shiny'",
+        "description": "Spoken 'sha-' from 'shadows' and 'ocean'",
     },
 
     # --- BATCH 4: Remaining Consonants, Glides & Nasal Codas ---
@@ -512,9 +517,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "fricative_voiced",
         "formants": (730, 1090, 2440),
-        "source_words": [("lazy", "from_sibilant"), ("voices", "from_sibilant")],
+        "source_words": [("lazy", "from_sibilant"), ("voices", "from_sibilant"), ("easy", "from_sibilant")],
         "aliases": ["zh aa", "zha", "zh"],
-        "description": "Voiced sibilant ('lazy', 'voices')",
+        "description": "Voiced sibilant ('lazy', 'voices', 'easy')",
     },
     {
         "id": "39_w_aa",
@@ -524,7 +529,7 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "glide",
         "formants": (730, 1090, 2440),
-        "source_words": [("warm", "full"), ("while", "full"), ("quick", "full")],
+        "source_words": [("warm", "full"), ("while", "full"), ("always", "first_half"), ("quick", "full")],
         "aliases": ["w aa", "- w aa", "w iy", "wa", "wi", "w"],
         "description": "Spoken 'warm / while' from your recording",
     },
@@ -536,9 +541,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "liquid",
         "formants": (730, 1090, 2440),
-        "source_words": [("ride", "full"), ("riding", "first_half"), ("brown", "full")],
+        "source_words": [("brings", "first_half"), ("brown", "full"), ("forest", "first_half"), ("ride", "full")],
         "aliases": ["r aa", "- r aa", "ra", "ro"],
-        "description": "Spoken 'ride / brown' from your recording",
+        "description": "Spoken 'brings / brown' from your recording",
     },
     {
         "id": "41_n_aa",
@@ -548,7 +553,7 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "nasal",
         "formants": (730, 1090, 2440),
-        "source_words": [("night", "full"), ("sunny", "second_half"), ("shiny", "second_half")],
+        "source_words": [("night", "full"), ("morning", "second_half"), ("sunny", "second_half")],
         "aliases": ["n aa", "- n aa", "n ow", "no"],
         "description": "Spoken 'night / -ny' from your recording",
     },
@@ -560,9 +565,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "nasal",
         "formants": (730, 1090, 2440),
-        "source_words": [("melody", "first_half"), ("me", "full")],
+        "source_words": [("morning", "first_half"), ("melody", "first_half"), ("meaning", "first_half"), ("me", "full")],
         "aliases": ["m aa", "- m aa", "m ay", "my"],
-        "description": "Spoken 'me- / me' from your recording",
+        "description": "Spoken 'mor- / me-' from your recording",
     },
     {
         "id": "43_ih_ng",
@@ -572,9 +577,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vc",
         "consonant_kind": "nasal",
         "formants": (390, 1990, 2550),
-        "source_words": [("singing", "second_half"), ("riding", "second_half")],
+        "source_words": [("singing", "second_half"), ("morning", "second_half"), ("meaning", "second_half")],
         "aliases": ["ih ng", "ng", "ing"],
-        "description": "Spoken '-ing' from your recording of 'singing'",
+        "description": "Spoken '-ing' from 'singing' and 'morning'",
     },
     {
         "id": "44_s_w_iy",
@@ -584,7 +589,7 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "sibilant",
         "formants": (270, 2290, 3010),
-        "source_words": [("sunny", "first_half"), ("bicycle", "from_sibilant")],
+        "source_words": [("sunny", "first_half"), ("singing", "first_half")],
         "aliases": ["s w", "w iy", "swiy", "si"],
         "description": "Sibilant onset from your recording",
     },
@@ -596,9 +601,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "stop_unvoiced",
         "formants": (300, 870, 2240),
-        "source_words": [("to", "full"), ("through", "full"), ("do", "full"), ("you", "full")],
+        "source_words": [("through", "full"), ("dew", "full"), ("to", "full"), ("do", "full")],
         "aliases": ["t uw -", "tuw", "too"],
-        "description": "Spoken 'to / through / do' from your recording",
+        "description": "Spoken 'through / dew' from your recording",
     },
     {
         "id": "46_b_eh_l",
@@ -608,9 +613,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "cv",
         "consonant_kind": "stop_voiced",
         "formants": (530, 1840, 2480),
-        "source_words": [("bell", "full")],
+        "source_words": [("melody", "first_half"), ("yellow", "first_half"), ("bay", "full"), ("bell", "full")],
         "aliases": ["b eh l", "bel"],
-        "description": "Spoken 'Bell' from your recording",
+        "description": "Open-mid front lateral syllable ('melody', 'yellow')",
     },
     {
         "id": "47_ae_nd",
@@ -620,7 +625,7 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vc",
         "consonant_kind": "nasal",
         "formants": (660, 1720, 2410),
-        "source_words": [("answer", "pre_sibilant"), ("brown", "full")],
+        "source_words": [("brown", "full"), ("morning", "first_half"), ("answer", "pre_sibilant")],
         "aliases": ["ae n d", "n d", "and"],
         "description": "Nasal coda from your recording",
     },
@@ -632,9 +637,9 @@ PHONEME_INVENTORY: List[Dict[str, Any]] = [
         "type": "vc",
         "consonant_kind": "liquid",
         "formants": (570, 840, 2410),
-        "source_words": [("all", "full"), ("warm", "full"), ("dog", "full")],
+        "source_words": [("always", "pre_sibilant"), ("warm", "full"), ("dog", "full"), ("all", "full")],
         "aliases": ["ao l -", "- ao l", "all"],
-        "description": "Spoken 'all' in your natural accent",
+        "description": "Spoken 'al-' from 'always'",
     },
 ]
 

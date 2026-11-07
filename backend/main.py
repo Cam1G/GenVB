@@ -79,6 +79,17 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def disable_static_cache(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith((".html", ".js", ".css")):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 @app.get("/api/config")
 async def get_studio_config() -> Dict[str, Any]:
     """Return teleprompter sentences, phoneme count, and backend capability flags."""
